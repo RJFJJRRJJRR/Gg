@@ -1,0 +1,75 @@
+name: Windows Server 2022 RDP Access
+
+on:
+  workflow_dispatch: # Cho phép chạy workflow thủ công từ trang Actions
+
+jobs:
+  rdp_session: # Đổi tên job để dễ phân biệt
+    runs-on: windows-2022 # Chỉ định runner là Windows Server 2022
+
+    steps:
+    - name: Setup ngrok Tunnel for RDP
+      run: |
+        # Tải ngrok v3
+        Invoke-WebRequest -Uri https://ngrok.com/download/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
+        Expand-Archive ngrok.zip -DestinationPath .
+
+        # Xác thực ngrok v3
+        .\ngrok.exe authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
+
+        # Khởi động ngrok v3 tunnel cho cổng RDP (3389) và xuất log ra file
+        # Sử dụng Start-Process để chạy ngrok ở chế độ nền và chuyển hướng output vào một file log
+        # Thêm --log-level debug để có thêm thông tin chi tiết trong file ngrok.log
+        Start-Process -FilePath ".\ngrok.exe" -ArgumentList "tcp 3389 --log=ngrok.log --log-level debug" -NoNewWindow -PassThru | Out-Null
+
+        Write-Host "Waiting for ngrok tunnel to become active and get public URL..."
+        $ngrok_url = $null
+        $retryCount = 0
+        $maxRetries = 40 # Thử lại 40 lần
+        $sleepSeconds = 5 # Mỗi lần chờ 5 giây (Tổng cộng tối đa 200 giây ~ 3 phút 20 giây)
+
+        while ($ngrok_url -eq $null -and $retryCount -lt $maxRetries) {
+            # Đọc nội dung file log của ngrok và tìm dòng chứa URL
+            # -ErrorAction SilentlyContinue để tránh lỗi nếu file chưa tồn tại hoặc đang bị ghi
+            $log_content = Get-Content -Path ngrok.log -ErrorAction SilentlyContinue
+
+            # Tìm kiếm URL dạng tcp://xxxxx.tcp.ngrok.io:yyyyy
+            # Biểu thức chính quy này tìm các ký tự chữ cái, số, dấu gạch nối
+            $match = $log_content | Select-String -Pattern 'tcp:\/\/[a-zA-Z0-9-]+\.tcp\.ngrok\.io:\d+'
+
+            if ($match) {
+                $ngrok_url = $match.Matches[0].Value
+                Write-Host "Found ngrok URL in log: $ngrok_url"
+            } else {
+                Write-Host "Ngrok URL not found in log yet. Retrying... (Attempt $($retryCount + 1)/$maxRetries)"
+            }
+
+            if ($ngrok_url -eq $null) {
+                Start-Sleep -Seconds $sleepSeconds
+                $retryCount++
+            }
+        }
+
+        if ($ngrok_url -eq $null) {
+            Write-Error "Failed to get ngrok tunnel URL after multiple retries. Please check ngrok.log for details."
+            Write-Host "--- Full ngrok.log Content Below ---"
+            Get-Content -Path ngrok.log # In toàn bộ nội dung log ngrok ra để debug
+            Write-Host "--- End of ngrok.log Content ---"
+            exit 1 # Thoát với lỗi
+        }
+
+        # Lưu địa chỉ ngrok vào file (tùy chọn) - Có thể bỏ qua bước này nếu không cần
+        Set-Content -Path "ngrok_url.txt" -Value $ngrok_url
+
+        # Hiển thị thông tin đăng nhập RDP mặc định của GitHub Actions runner
+        Write-Host "Username for RDP: runneradmin"
+        Write-Host "Mật khẩu RDP được tạo tự động bởi GitHub Actions và thường xuất hiện trong các dòng log đầu tiên của job này, hoặc trong các biến môi trường của runner."
+        Write-Host "Hãy tìm kiếm 'password' trong log của job này để tìm mật khẩu."
+
+
+    - name: Keep RDP session alive (Important!)
+      run: |
+        Write-Host "Keeping session alive for about 5 hours 50 minutes..."
+        Start-Sleep -Seconds 20700 # ~ 5 giờ 45 phút (tối đa 6 giờ)
+        Write-Host "Session is about to end."
+      timeout-minutes: 350 # Đặt tối đa 350 phút để an toàn hơn, không vượt quá giới hạn 360 phút của GitHub
