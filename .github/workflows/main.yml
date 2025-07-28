@@ -1,0 +1,37 @@
+name: Interactive Windows Server 2022 RDP
+
+on:
+  workflow_dispatch: # Cho phép chạy thủ công từ GitHub Actions UI
+
+jobs:
+  rdp_access:
+    runs-on: windows-2022 # Chỉ định runner Windows Server 2022
+
+    steps:
+    - name: Setup ngrok Tunnel for RDP
+      run: |
+        # Tải ngrok
+        Invoke-WebRequest -Uri https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-windows-amd64.zip -OutFile ngrok.zip
+        Expand-Archive ngrok.zip -DestinationPath .
+
+        # Xác thực ngrok (THAY THẾ <YOUR_NGROK_AUTH_TOKEN> BẰNG TOKEN CỦA BẠN)
+        .\ngrok.exe authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
+
+        # Khởi động ngrok tunnel cho cổng RDP (3389)
+        Start-Process -FilePath ".\ngrok.exe" -ArgumentList "tcp 3389 --log=stdout" -NoNewWindow -PassThru | Out-Null
+
+        # Chờ ngrok khởi động và lấy địa chỉ công khai
+        Start-Sleep -Seconds 10 # Chờ 10 giây để ngrok khởi động
+        $ngrok_url = (Invoke-WebRequest -Uri "http://localhost:4040/api/tunnels" -UseBasicParsing | ConvertFrom-Json).tunnels[0].public_url
+        Write-Host "Remote Desktop available at: $ngrok_url"
+
+        # Lưu địa chỉ ngrok vào file để dễ truy cập sau này (tùy chọn)
+        Set-Content -Path "ngrok_url.txt" -Value $ngrok_url
+
+    - name: Keep RDP session alive (Important!)
+      run: |
+        Write-Host "Keeping session alive for 5 hours 50 minutes..."
+        Start-Sleep -Seconds 20700 # ~ 5 giờ 45 phút, để đủ thời gian bạn kết nối RDP
+        Write-Host "Session is about to end."
+      # Đặt timeout-minutes cho job (tối đa 360 phút = 6 giờ)
+      timeout-minutes: 350 # Đặt thấp hơn 360 để an toàn, ví dụ 350 phút (~5 giờ 50 phút)
