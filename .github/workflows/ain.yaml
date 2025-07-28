@@ -1,0 +1,63 @@
+name: Interactive Windows Server 2022 RDP v2 # Hoặc tên workflow của bạn
+
+on:
+  workflow_dispatch:
+
+jobs:
+  rdp_access:
+    runs-on: windows-2022
+
+    steps:
+    - name: Setup ngrok Tunnel for RDP
+      run: |
+        # Tải ngrok v3
+        Invoke-WebRequest -Uri https://ngrok.com/download/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
+        Expand-Archive ngrok.zip -DestinationPath .
+
+        # Xác thực ngrok v3
+        .\ngrok.exe authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
+
+        # Khởi động ngrok v3 tunnel cho cổng RDP (3389) ở chế độ nền
+        Start-Process -FilePath ".\ngrok.exe" -ArgumentList "tcp 3389 --log=stdout" -NoNewWindow -PassThru -OutVariable NgrokProcess | Out-Null
+
+        Write-Host "Waiting for ngrok tunnel to become active..."
+        $ngrokReady = $false
+        $retryCount = 0
+        $maxRetries = 20 # Thử lại 20 lần
+        $sleepSeconds = 5 # Mỗi lần chờ 5 giây
+
+        while (-not $ngrokReady -and $retryCount -lt $maxRetries) {
+            try {
+                $response = Invoke-WebRequest -Uri "http://localhost:4040/api/tunnels" -UseBasicParsing -ErrorAction Stop
+                $json = ConvertFrom-Json $response.Content
+                if ($json.tunnels.Count -gt 0) {
+                    $ngrokReady = $true
+                    $ngrok_url = $json.tunnels[0].public_url
+                    Write-Host "Remote Desktop available at: $ngrok_url"
+                } else {
+                    Write-Host "Ngrok API available, but no tunnels found yet. Retrying..."
+                }
+            } catch {
+                Write-Host "Ngrok API not ready yet. Retrying... (Error: $($_.Exception.Message))"
+            }
+            if (-not $ngrokReady) {
+                Start-Sleep -Seconds $sleepSeconds
+                $retryCount++
+            }
+        }
+
+        if (-not $ngrokReady) {
+            Write-Error "Failed to get ngrok tunnel URL after multiple retries. Ngrok might not have started correctly or the API is unresponsive."
+            exit 1 # Thoát với lỗi
+        }
+
+        # Lưu địa chỉ ngrok vào file để dễ truy cập sau này (tùy chọn)
+        Set-Content -Path "ngrok_url.txt" -Value $ngrok_url
+
+
+    - name: Keep RDP session alive (Important!)
+      run: |
+        Write-Host "Keeping session alive for about 5 hours 50 minutes..."
+        Start-Sleep -Seconds 20700 # ~ 5 giờ 45 phút (tối đa 6 giờ)
+        Write-Host "Session is about to end."
+      timeout-minutes: 350 # Đặt tối đa 350 phút để an toàn hơn, không vượt quá giới hạn 360 phút của GitHub
